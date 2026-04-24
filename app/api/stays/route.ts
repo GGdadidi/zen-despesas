@@ -1,75 +1,41 @@
-import { createClient } from "@supabase/supabase-js";
-
+// app/api/stays/route.ts
 export async function GET() {
   try {
-    console.log("🚀 Iniciando importação...");
+    // A Stays usa Basic Auth direto — sem etapa de /auth
+    const credentials = Buffer.from(
+      `${process.env.STAYS_LOGIN}:${process.env.STAYS_PASSWORD}`
+    ).toString("base64");
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    // Buscar lista de imóveis direto com Basic Auth
+    const imoveisRes = await fetch("https://bsc.stays.com.br/external/v1/content/listings", {
+      method: "GET",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/json",
+      },
+    });
 
-    let allListings: any[] = [];
-    let skip = 0;
-    const limit = 20;
-
-    while (true) {
-      console.log(`🔄 Buscando listings: skip=${skip}`);
-
-      const res = await fetch(
-        `https://bsc.stays.net/api/v1/content/listings?limit=${limit}&skip=${skip}&status=active`,
-        {
-          method: "GET",
-          headers: {
-            Authorization:
-              "Basic " +
-              Buffer.from(
-                `${process.env.STAYS_LOGIN}:${process.env.STAYS_PASSWORD}`
-              ).toString("base64"),
-          },
-        }
+    if (!imoveisRes.ok) {
+      const errorText = await imoveisRes.text();
+      return Response.json(
+        { 
+          error: "Falha ao buscar imóveis", 
+          detail: errorText, 
+          status: imoveisRes.status 
+        },
+        { status: 500 }
       );
-
-      console.log("STATUS:", res.status);
-
-      if (!res.ok) {
-        const text = await res.text();
-        console.error("❌ ERRO NA STAYS:", text);
-        throw new Error(`Erro HTTP ${res.status}`);
-      }
-
-      const json = await res.json();
-      const data = json.items || json || [];
-
-      console.log("📦 Recebidos:", data.length);
-
-      if (!data.length) break;
-
-      allListings.push(...data);
-
-      for (const item of data) {
-        await supabase.from("imoveis").upsert({
-          id: item.id,
-          nome: item.name || "Sem nome",
-        });
-      }
-
-      skip += limit;
     }
 
-    console.log("✅ TOTAL IMPORTADO:", allListings.length);
+    const imoveis = await imoveisRes.json();
 
-    return Response.json({
-      success: true,
-      total: allListings.length,
+    return Response.json({ 
+      success: true, 
+      total: Array.isArray(imoveis) ? imoveis.length : "?", 
+      imoveis 
     });
 
   } catch (err: any) {
-    console.error("🔥 ERRO FINAL:", err.message);
-
-    return Response.json(
-      { error: err.message },
-      { status: 500 }
-    );
+    return Response.json({ error: err.message }, { status: 500 });
   }
 }
