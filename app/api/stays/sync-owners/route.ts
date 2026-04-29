@@ -1,13 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
 const STAYS_DOMAIN = "https://bsc.stays.com.br";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -20,15 +13,10 @@ export async function OPTIONS() {
 
 export async function GET() {
   try {
-    const login = process.env.STAYS_LOGIN;
-    const senha = process.env.STAYS_SENHA;
-
-    console.log("STAYS_LOGIN:", login);
-    console.log("STAYS_SENHA:", senha);
-
-    // Hardcode temporário para testar se o problema é a env var
-    const authLogin = login ?? "396ef30e";
-    const authSenha = senha ?? "06ce0efa";
+    const authLogin = process.env.STAYS_LOGIN ?? "396ef30e";
+    const authSenha = process.env.STAYS_SENHA ?? "06ce0efa";
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
     const hoje = new Date();
     const from = `${hoje.getFullYear()}-01-01`;
@@ -36,10 +24,7 @@ export async function GET() {
 
     const auth = Buffer.from(`${authLogin}:${authSenha}`).toString("base64");
 
-    console.log("Auth base64:", auth);
-    console.log("URL:", `${STAYS_DOMAIN}/external/v1/finance/owners?from=${from}&to=${to}`);
-
-    const response = await fetch(
+    const staysRes = await fetch(
       `${STAYS_DOMAIN}/external/v1/finance/owners?from=${from}&to=${to}`,
       {
         headers: {
@@ -49,18 +34,15 @@ export async function GET() {
       }
     );
 
-    console.log("Status Stays:", response.status);
-
-    if (!response.ok) {
-      const text = await response.text();
+    if (!staysRes.ok) {
+      const text = await staysRes.text();
       return NextResponse.json(
-        { success: false, error: `Stays API error: ${response.status} - ${text}`, auth_used: authLogin },
+        { success: false, error: `Stays API error: ${staysRes.status} - ${text}` },
         { headers: corsHeaders }
       );
     }
 
-    const owners = await response.json();
-
+    const owners = await staysRes.json();
     if (!Array.isArray(owners)) {
       return NextResponse.json(
         { success: false, error: "Resposta inesperada", raw: owners },
@@ -73,29 +55,56 @@ export async function GET() {
     for (const owner of owners) {
       const staysId = owner._id;
       const nome = owner.name;
-
       if (!staysId || !nome) continue;
 
-      const { error } = await supabase
-        .from("proprietarios")
-        .upsert({ id: staysId, nome }, { onConflict: "id" });
+      // Usa fetch direto para a API REST do Supabase com service role key
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/proprietarios?id=eq.${staysId}`,
+        {
+          method: "GET",
+          headers: {
+            apikey: serviceKey,
+            Authorization: `Bearer ${serviceKey}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
-      resultados.push({
-        staysId,
-        nome,
-        acao: error ? `erro: ${error.message}` : "atualizado",
-      });
+      const existing = await res.json();
+
+      if (existing.length > 0) {
+        // Atualiza
+        const upRes = await fetch(
+          `${supabaseUrl}/rest/v1/proprietarios?id=eq.${staysId}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({ nome }),
+          }
+        );
+        resultados.push({ staysId, nome, acao: upRes.ok ? "atualizado" : `erro: ${upRes.status}` });
+      } else {
+        // Insere
+        const insRes = await fetch(
+          `${supabaseUrl}/rest/v1/proprietarios`,
+          {
+            method: "POST",
+            headers: {
+              apikey: serviceKey,
+              Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({ id: staysId, nome }),
+          }
+        );
+        resultados.push({ staysId, nome, acao: insRes.ok ? "inserido" : `erro: ${insRes.status} - ${await insRes.text()}` });
+      }
     }
 
     return NextResponse.json(
-      { success: true, total: owners.length, resultados },
-      { headers: corsHeaders }
-    );
-  } catch (error: any) {
-    console.error(error);
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { headers: corsHeaders }
-    );
-  }
-}
