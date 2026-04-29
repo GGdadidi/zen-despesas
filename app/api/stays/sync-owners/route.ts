@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const STAYS_DOMAIN = "https://bsc.stays.com.br";
-const STAYS_LOGIN = process.env.STAYS_LOGIN!;
-const STAYS_SENHA = process.env.STAYS_SENHA!;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,12 +20,24 @@ export async function OPTIONS() {
 
 export async function GET() {
   try {
+    const login = process.env.STAYS_LOGIN;
+    const senha = process.env.STAYS_SENHA;
+
+    console.log("STAYS_LOGIN:", login);
+    console.log("STAYS_SENHA:", senha);
+
+    // Hardcode temporário para testar se o problema é a env var
+    const authLogin = login ?? "396ef30e";
+    const authSenha = senha ?? "06ce0efa";
+
     const hoje = new Date();
-    // Máximo 1 ano — usa só o ano atual
     const from = `${hoje.getFullYear()}-01-01`;
     const to = hoje.toISOString().split("T")[0];
 
-    const auth = Buffer.from(`${STAYS_LOGIN}:${STAYS_SENHA}`).toString("base64");
+    const auth = Buffer.from(`${authLogin}:${authSenha}`).toString("base64");
+
+    console.log("Auth base64:", auth);
+    console.log("URL:", `${STAYS_DOMAIN}/external/v1/finance/owners?from=${from}&to=${to}`);
 
     const response = await fetch(
       `${STAYS_DOMAIN}/external/v1/finance/owners?from=${from}&to=${to}`,
@@ -39,10 +49,12 @@ export async function GET() {
       }
     );
 
+    console.log("Status Stays:", response.status);
+
     if (!response.ok) {
       const text = await response.text();
       return NextResponse.json(
-        { success: false, error: `Stays API error: ${response.status} - ${text}` },
+        { success: false, error: `Stays API error: ${response.status} - ${text}`, auth_used: authLogin },
         { headers: corsHeaders }
       );
     }
