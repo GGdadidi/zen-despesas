@@ -7,6 +7,7 @@ export async function GET() {
       process.env.SUPABASE_SERVICE_ROLE_KEY_PROPRIETARIOS!
     )
 
+    // 🔌 BUSCAR RESERVAS NA STAYS
     const response = await fetch(
       'https://bsc.stays.com.br/external/v1/booking/reservations?from=2023-01-01&to=2026-12-31&dateType=arrival&limit=100&skip=0',
       {
@@ -21,57 +22,14 @@ export async function GET() {
     )
 
     const json = await response.json()
+
+    // ⚠️ STAYS às vezes retorna dentro de "data"
     const reservasStays = json.data || json
 
-    let totalProcessadas = 0
-
     for (const r of reservasStays) {
-      console.log('🔎 Reserva completa:', JSON.stringify(r, null, 2))
 
-      // 🔥 TENTA PEGAR ID DO IMÓVEL DE VÁRIOS LUGARES
-      const propertyId =
-        r.propertyId ||
-        r.property_id ||
-        r.listingId ||
-        r.listing_id ||
-        r.roomId ||
-        r.room_id ||
-        r.accommodationId ||
-        r.accommodation_id ||
-        r?.room?.id ||
-        r?.listing?.id ||
-        r?.accommodation?.id
-
-      const propertyName =
-        r.propertyName ||
-        r.property_name ||
-        r?.listing?.name ||
-        r?.room?.name ||
-        'Imóvel Stays'
-
-      const valor =
-        r.totalAmount ||
-        r.total_price ||
-        r.stats?._f_totalPaid ||
-        0
-
-      const checkin =
-        r.checkInDate ||
-        r.checkin ||
-        r.arrivalDate
-
-      const checkout =
-        r.checkOutDate ||
-        r.checkout ||
-        r.departureDate
-
-      if (!propertyId) {
-        console.log('⚠️ Sem propertyId — verificar estrutura acima')
-        continue
-      }
-
-      // 👤 PROPRIETÁRIO
-      const emailFake = `${propertyId}@stays.com`
+      // 🧍 PROPRIETÁRIO (simples por enquanto)
+      const emailFake = `${r.propertyId}@stays.com`
 
       const { data: proprietario } = await supabase
         .from('proprietarios')
@@ -83,48 +41,41 @@ export async function GET() {
           { onConflict: 'email' }
         )
         .select()
-        .maybeSingle()
-
-      if (!proprietario) continue
+        .single()
 
       // 🏠 IMÓVEL
       const { data: imovel } = await supabase
         .from('imoveis')
         .upsert(
           {
-            nome: propertyName,
-            stays_id: propertyId,
+            nome: r.propertyName || 'Imóvel Stays',
+            stays_id: r.propertyId,
             proprietario_id: proprietario.id
           },
           { onConflict: 'stays_id' }
         )
         .select()
-        .maybeSingle()
-
-      if (!imovel) continue
+        .single()
 
       // 💾 RESERVA
       await supabase.from('reservas').upsert(
         {
-          stays_id: r._id || r.id,
-          valor: valor,
-          data_checkin: checkin,
-          data_checkout: checkout,
+          stays_id: r.id,
+          valor: r.totalAmount || 0,
+          data_checkin: r.checkInDate,
+          data_checkout: r.checkOutDate,
           imovel_id: imovel.id
         },
         { onConflict: 'stays_id' }
       )
-
-      totalProcessadas++
     }
 
     return Response.json({
       success: true,
-      processadas: totalProcessadas
+      total: reservasStays.length
     })
 
   } catch (err: any) {
-    console.error(err)
     return Response.json(
       { error: err.message },
       { status: 500 }
